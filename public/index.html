@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Multi-Trip Budget Perjalanan (Firebase)</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    #trip-edit-input {
+      display: none;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .trip-select-wrapper {
+      position: relative;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+  </style>
+</head>
+<body class="bg-light py-5">
+  <div class="container">
+    <h1 class="text-center mb-4">Multi-Trip Budget Perjalanan</h1>
+
+    <!-- Trip Selector, Edit, Hapus & Add Trip -->
+    <div class="card mb-4">
+      <div class="card-body">
+        <div class="row g-2 align-items-center">
+          <div class="col-md-5 trip-select-wrapper">
+            <select id="trip-select" class="form-select" onchange="changeTrip()"></select>
+            <button id="edit-trip-btn" class="btn btn-outline-secondary btn-sm" title="Edit Nama Trip" onclick="startEditTrip()" type="button">✏️</button>
+            <button id="delete-trip-btn" class="btn btn-outline-danger btn-sm" title="Hapus Trip" onclick="deleteTrip()" type="button">🗑️</button>
+          </div>
+          <div class="col-md-5">
+            <input type="text" id="new-trip-name" class="form-control" placeholder="Nama Trip Baru">
+          </div>
+          <div class="col-md-2 d-grid">
+            <button class="btn btn-success" onclick="addTrip()">Tambah Trip</button>
+          </div>
+        </div>
+        <div class="row mt-2">
+          <div class="col-md-5">
+            <input type="text" id="trip-edit-input" class="form-control" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Budget Form -->
+    <div class="card mb-4">
+      <div class="card-body">
+        <div class="row g-2">
+          <div class="col-md-5">
+            <input type="text" id="category" class="form-control" placeholder="Kategori (mis: Akomodasi)">
+          </div>
+          <div class="col-md-5">
+            <input type="number" id="amount" class="form-control" placeholder="Budget (Rp)">
+          </div>
+          <div class="col-md-2 d-grid">
+            <button class="btn btn-primary" onclick="addBudget()">Tambah</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Budget Table -->
+    <table class="table table-striped">
+      <thead class="table-dark">
+        <tr>
+          <th>Kategori</th>
+          <th>Budget (Rp)</th>
+          <th>Aksi</th>
+        </tr>
+      </thead>
+      <tbody id="budget-list"></tbody>
+    </table>
+
+    <!-- Total + Export -->
+    <div class="d-flex justify-content-between align-items-center mt-3">
+      <div id="total-budget" class="fw-bold fs-5">Total: Rp 0</div>
+      <button class="btn btn-success" onclick="exportToCSV()">Export ke CSV</button>
+    </div>
+  </div>
+
+  <!-- Firebase SDK + App Script -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-app.js";
+    import { getFirestore, collection, doc, getDocs, getDoc, setDoc, updateDoc, deleteDoc, arrayUnion, arrayRemove, onSnapshot } from "https://www.gstatic.com/firebasejs/11.9.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDJBr3JWfh7JVuUsrTQKLf8fkhPqI7SJRE",
+      authDomain: "frandosprojects.firebaseapp.com",
+      projectId: "frandosprojects",
+      storageBucket: "frandosprojects.firebasestorage.app",
+      messagingSenderId: "529291901045",
+      appId: "1:529291901045:web:a9290fea9a31d0842b603c",
+      measurementId: "G-DDWPJG6KE1"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    let trips = {};
+    let currentTrip = '';
+
+    const tripSelect = document.getElementById('trip-select');
+    const tripEditInput = document.getElementById('trip-edit-input');
+    const editTripBtn = document.getElementById('edit-trip-btn');
+    const deleteTripBtn = document.getElementById('delete-trip-btn');
+
+    async function init() {
+      await loadTrips();
+    }
+
+    async function loadTrips() {
+      trips = {};
+      const querySnapshot = await getDocs(collection(db, "trips"));
+      querySnapshot.forEach(docSnap => {
+        trips[docSnap.id] = docSnap.data().budgets || [];
+      });
+      currentTrip = Object.keys(trips)[0] || '';
+      renderTripSelect();
+
+      if (currentTrip) {
+        tripSelect.value = currentTrip;
+        listenToTrip(currentTrip);
+        setEditButtonsState(true);
+      } else {
+        setEditButtonsState(false);
+      }
+    }
+
+    function renderTripSelect() {
+      tripSelect.innerHTML = '';
+      Object.keys(trips).forEach(tripName => {
+        const option = document.createElement('option');
+        option.value = tripName;
+        option.textContent = tripName;
+        tripSelect.appendChild(option);
+      });
+    }
+
+    async function addTrip() {
+      const tripName = document.getElementById('new-trip-name').value.trim();
+      if (tripName === '') {
+        alert('Mohon masukkan nama trip.');
+        return;
+      }
+      if (trips[tripName]) {
+        alert('Trip dengan nama ini sudah ada.');
+        return;
+      }
+      await setDoc(doc(db, "trips", tripName), { budgets: [] });
+      trips[tripName] = [];
+      currentTrip = tripName;
+      renderTripSelect();
+      tripSelect.value = currentTrip;
+      listenToTrip(currentTrip);
+      setEditButtonsState(true);
+      document.getElementById('new-trip-name').value = '';
+    }
+
+    function changeTrip() {
+      currentTrip = tripSelect.value;
+      listenToTrip(currentTrip);
+      setEditButtonsState(true);
+      hideEditInput();
+    }
+
+    let unsubscribe = null;
+    function listenToTrip(tripName) {
+      if (unsubscribe) unsubscribe();
+      const tripDocRef = doc(db, "trips", tripName);
+      unsubscribe = onSnapshot(tripDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+          trips[tripName] = docSnap.data().budgets || [];
+          renderBudgetList();
+        }
+      });
+    }
+
+    function renderBudgetList() {
+      const tableBody = document.getElementById('budget-list');
+      tableBody.innerHTML = '';
+      let totalBudget = 0;
+      const budgetList = trips[currentTrip] || [];
+      budgetList.forEach((item, index) => {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td>${item.category}</td>
+          <td>Rp ${item.amount.toLocaleString('id-ID')}</td>
+          <td>
+            <button class="btn btn-sm btn-danger" onclick="deleteBudget(${index})">Hapus</button>
+          </td>
+        `;
+        tableBody.appendChild(row);
+        totalBudget += item.amount;
+      });
+      document.getElementById('total-budget').innerText = `Total: Rp ${totalBudget.toLocaleString('id-ID')}`;
+    }
+
+    async function addBudget() {
+      if (!currentTrip) {
+        alert('Mohon buat atau pilih trip terlebih dahulu.');
+        return;
+      }
+      const categoryInput = document.getElementById('category');
+      const amountInput = document.getElementById('amount');
+      const category = categoryInput.value.trim();
+      const amount = parseInt(amountInput.value);
+
+      if (category === '' || isNaN(amount) || amount <= 0) {
+        alert('Mohon masukkan kategori dan jumlah budget yang valid.');
+        return;
+      }
+
+      await updateDoc(doc(db, "trips", currentTrip), {
+        budgets: arrayUnion({ category, amount })
+      });
+
+      categoryInput.value = '';
+      amountInput.value = '';
+    }
+
+    async function deleteBudget(index) {
+      if (!confirm('Yakin ingin menghapus item ini?')) return;
+      const item = trips[currentTrip][index];
+      await updateDoc(doc(db, "trips", currentTrip), {
+        budgets: arrayRemove(item)
+      });
+    }
+
+    async function deleteTrip() {
+      if (!currentTrip) return;
+      if (!confirm(`Yakin ingin menghapus trip "${currentTrip}" beserta semua budgetnya?`)) return;
+      await deleteDoc(doc(db, "trips", currentTrip));
+      const tripNames = Object.keys(trips).filter(name => name !== currentTrip);
+      currentTrip = tripNames[0] || '';
+      await loadTrips();
+      if (currentTrip) {
+        tripSelect.value = currentTrip;
+        listenToTrip(currentTrip);
+        setEditButtonsState(true);
+      } else {
+        document.getElementById('budget-list').innerHTML = '';
+        document.getElementById('total-budget').innerText = 'Total: Rp 0';
+        setEditButtonsState(false);
+      }
+    }
+
+    function startEditTrip() {
+      if (!currentTrip) return;
+      tripEditInput.value = currentTrip;
+      tripEditInput.style.display = 'block';
+      tripSelect.style.display = 'none';
+      editTripBtn.style.display = 'none';
+      deleteTripBtn.style.display = 'none';
+      tripEditInput.focus();
+    }
+
+    tripEditInput.addEventListener('keydown', async function(e) {
+      if (e.key === 'Enter') {
+        await saveEditTrip();
+      } else if (e.key === 'Escape') {
+        cancelEditTrip();
+      }
+    });
+
+    tripEditInput.addEventListener('blur', saveEditTrip);
+
+    async function saveEditTrip() {
+      const newName = tripEditInput.value.trim();
+      if (newName === '') {
+        alert('Nama trip tidak boleh kosong.');
+        tripEditInput.focus();
+        return;
+      }
+      if (newName !== currentTrip && trips[newName]) {
+        alert('Nama trip sudah digunakan.');
+        tripEditInput.focus();
+        return;
+      }
+      if (newName !== currentTrip) {
+        const oldData = trips[currentTrip];
+        await setDoc(doc(db, "trips", newName), { budgets: oldData });
+        await deleteDoc(doc(db, "trips", currentTrip));
+        currentTrip = newName;
+        await loadTrips();
+        tripSelect.value = currentTrip;
+        listenToTrip(currentTrip);
+      }
+      hideEditInput();
+    }
+
+    function cancelEditTrip() {
+      hideEditInput();
+    }
+
+    function hideEditInput() {
+      tripEditInput.style.display = 'none';
+      tripSelect.style.display = 'block';
+      editTripBtn.style.display = 'inline-block';
+      deleteTripBtn.style.display = 'inline-block';
+    }
+
+    function setEditButtonsState(enabled) {
+      editTripBtn.disabled = !enabled;
+      deleteTripBtn.disabled = !enabled;
+    }
+
+    function exportToCSV() {
+      if (!currentTrip || (trips[currentTrip] || []).length === 0) {
+        alert('Tidak ada data untuk di-export.');
+        return;
+      }
+      let csvContent = 'Kategori,Budget (Rp)\n';
+      trips[currentTrip].forEach(item => {
+        csvContent += `"${item.category}","${item.amount}"\n`;
+      });
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', currentTrip + '_budget.csv');
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    window.addTrip = addTrip;
+    window.changeTrip = changeTrip;
+    window.addBudget = addBudget;
+    window.deleteBudget = deleteBudget;
+    window.deleteTrip = deleteTrip;
+    window.startEditTrip = startEditTrip;
+    window.exportToCSV = exportToCSV;
+
+    init();
+  </script>
+</body>
+</html>
